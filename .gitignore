@@ -1,0 +1,46 @@
+# AI Reference Files (local development docs)
+/ai/
+
+
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hardhat
+cache/
+artifacts/
+typechain-types/
+
+# Coverage
+coverage/
+coverage.json
+
+# Misc
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+docs/

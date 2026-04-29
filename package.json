@@ -1,0 +1,48 @@
+{
+  "name": "shielded-stablecoin-poc",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "account": "pnpm --filter @shielded-stablecoin/hardhat account",
+    "chain": "pnpm --filter @shielded-stablecoin/hardhat chain",
+    "fork": "pnpm --filter @shielded-stablecoin/hardhat fork",
+    "deploy": "pnpm --filter @shielded-stablecoin/hardhat deploy",
+    "verify": "pnpm --filter @shielded-stablecoin/hardhat verify",
+    "hardhat-verify": "pnpm --filter @shielded-stablecoin/hardhat hardhat-verify",
+    "compile": "pnpm --filter @shielded-stablecoin/hardhat compile",
+    "generate": "pnpm --filter @shielded-stablecoin/hardhat generate",
+    "flatten": "pnpm --filter @shielded-stablecoin/hardhat flatten",
+    "hardhat:lint": "pnpm --filter @shielded-stablecoin/hardhat lint",
+    "hardhat:lint-staged": "pnpm --filter @shielded-stablecoin/hardhat lint-staged",
+    "hardhat:format": "pnpm --filter @shielded-stablecoin/hardhat format",
+    "hardhat:test": "pnpm --filter @shielded-stablecoin/hardhat test",
+    "test": "pnpm hardhat:test",
+    "format": "pnpm next:format && pnpm hardhat:format",
+    "start": "pnpm --filter @shielded-stablecoin/nextjs dev",
+    "next:dev": "pnpm --filter @shielded-stablecoin/nextjs dev",
+    "next:build": "pnpm --filter @shielded-stablecoin/nextjs build",
+    "next:start": "pnpm --filter @shielded-stablecoin/nextjs start",
+    "next:lint": "pnpm --filter @shielded-stablecoin/nextjs lint",
+    "next:format": "pnpm --filter @shielded-stablecoin/nextjs format",
+    "next:check-types": "pnpm --filter @shielded-stablecoin/nextjs check-types",
+    "vercel": "pnpm --filter @shielded-stablecoin/nextjs vercel",
+    "vercel:yolo": "pnpm --filter @shielded-stablecoin/nextjs vercel:yolo",
+    "postinstall": "husky install",
+    "precommit": "lint-staged",
+    "dev": "concurrently -n next,hardhat -c magenta,blue \"pnpm next:dev\" \"pnpm chain\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "husky": "^9.0.11",
+    "lint-staged": "^15.2.2"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.18.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "viem": "2.40.3"
+    }
+  }
+}

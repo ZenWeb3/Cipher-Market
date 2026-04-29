@@ -1,0 +1,1 @@
+working on a privacy inclined prediction market incoporating Fhenix FHE as its privacy layer.

@@ -1,0 +1,1 @@
+export { MintPage } from "./MintPage";
