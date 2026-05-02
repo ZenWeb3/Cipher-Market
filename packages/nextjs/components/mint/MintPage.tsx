@@ -1,287 +1,239 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useAccount } from "wagmi";
-import { Coins, ImageIcon, Loader2, RefreshCw, Lock, Unlock, Key, ArrowRight } from "lucide-react";
-import { useAuctionStore } from "@/services/store/auctionStore";
-import { useMint } from "@/hooks/useMint";
-import { useCofhe } from "@/hooks/useCofhe";
+import { useAccount, usePublicClient, useWalletClient } from "wagmi";
+import { Coins, Loader2, RefreshCw, Lock, Unlock } from "lucide-react";
+import toast from "react-hot-toast";
+import { FheTypes } from "@cofhe/sdk";
+import { betTokenAbi } from "@/utils/marketContracts";
+import { toastTxSuccess } from "@/utils/explorerLink";
 import { usePermit } from "@/hooks/usePermit";
-import { PermitModal } from "@/components/PermitModal";
+import { cofheClient } from "@/services/cofhe-client";
+import { useCofhe } from "@/hooks/useCofhe";
+
+const TOKEN_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_TOKEN_CONTRACT_ADDRESS as `0x${string}`;
+const MINT_AMOUNT = BigInt(1000 * 1_000_000);
 
 export const MintPage = () => {
   const { address } = useAccount();
-  const { setMainTab } = useAuctionStore();
-  const {
-    isLoading,
-    getNftBalance,
-    getEncryptedTokenBalanceHash,
-    unsealTokenBalance,
-    mintNft,
-    mintTokens,
-  } = useMint();
-  const { isInitialized: isCofheInitialized, isInitializing: isCofheInitializing } = useCofhe();
-  const { hasValidPermit, isGeneratingPermit, generatePermit } = usePermit();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
+  const { isInitialized: isCofheReady } = useCofhe();
+  const { hasValidPermit, generatePermit, isGeneratingPermit } = usePermit();
 
-  const ZERO_HASH = `0x${"0".repeat(64)}` as `0x${string}`;
-  const [nftBalance, setNftBalance] = useState<bigint>(BigInt(0));
-  const [encryptedTokenBalance, setEncryptedTokenBalance] = useState<bigint | null>(null);
-  const [encryptedBalanceHash, setEncryptedBalanceHash] = useState<`0x${string}`>(ZERO_HASH);
+  const [unsealedBalance, setUnsealedBalance] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isMinting, setIsMinting] = useState(false);
   const [isUnsealing, setIsUnsealing] = useState(false);
-  const [isPermitModalOpen, setIsPermitModalOpen] = useState(false);
 
   const isWalletConnected = !!address;
 
-  const refreshBalances = useCallback(async () => {
+  const refreshBalance = useCallback(async () => {
+    if (!publicClient || !address) return;
     setIsRefreshing(true);
-    const [nft, encryptedHash] = await Promise.all([
-      getNftBalance(),
-      getEncryptedTokenBalanceHash(),
-    ]);
-    setNftBalance(nft);
-    setEncryptedBalanceHash(encryptedHash);
-    // Reset encrypted balance when refreshing - user needs to unseal again
-    setEncryptedTokenBalance(null);
-    setIsRefreshing(false);
-  }, [getNftBalance, getEncryptedTokenBalanceHash]);
-
-  useEffect(() => {
-    if (isWalletConnected) {
-      refreshBalances();
+    try {
+      const balance = await publicClient.readContract({
+        address: TOKEN_CONTRACT_ADDRESS,
+        abi: betTokenAbi,
+        functionName: "balanceOf",
+        args: [address],
+        blockTag: "latest",
+      });
+    } catch (error) {
+      console.error("Failed to get balance:", error);
+    } finally {
+      setIsRefreshing(false);
     }
-  }, [isWalletConnected, refreshBalances]);
+  }, [publicClient, address]);
 
-  const handleMintNft = async () => {
-    const success = await mintNft();
-    if (success) {
-      refreshBalances();
+
+
+  const handleMint = async () => {
+    if (!walletClient || !address || !publicClient) {
+      toast.error("Wallet not connected");
+      return;
     }
-  };
-
-  const handleMintTokens = async () => {
-    const success = await mintTokens();
-    if (success) {
-      refreshBalances();
+    setIsMinting(true);
+    try {
+      toast.loading("Minting 1,000 AUCT tokens...", { id: "mint-tokens" });
+      const hash = await walletClient.writeContract({
+        address: TOKEN_CONTRACT_ADDRESS,
+        abi: betTokenAbi,
+        functionName: "mint",
+        args: [address, MINT_AMOUNT],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      toastTxSuccess("1,000 AUCT minted!", hash, "mint-tokens");
+      setUnsealedBalance(null);
+      setUnsealedBalance(null); // Reset unsealed since it changed
+      setTimeout(() => handleUnsealBalance(), 500);
+    } catch (error) {
+      console.error("Failed to mint:", error);
+      toast.error("Failed to mint tokens", { id: "mint-tokens" });
+    } finally {
+      setIsMinting(false);
     }
   };
 
   const handleUnsealBalance = async () => {
-    if (!hasValidPermit) {
-      // Create permit first
-      const result = await generatePermit();
-      if (!result.success) return;
+    if (!publicClient || !address || !isCofheReady) {
+      toast.error("CoFHE not ready");
+      return;
     }
 
     setIsUnsealing(true);
-    const unsealed = await unsealTokenBalance(encryptedBalanceHash);
-    setEncryptedTokenBalance(unsealed);
-    setIsUnsealing(false);
+    try {
+      // Ensure we have a permit
+      if (!hasValidPermit) {
+        toast.loading("Generating decryption permit...", { id: "unseal" });
+        const result = await generatePermit();
+        if (!result.success) {
+          toast.error("Failed to generate permit", { id: "unseal" });
+          setIsUnsealing(false);
+          return;
+        }
+        toast.dismiss("unseal");
+      }
+
+      toast.loading("Unsealing your encrypted balance...", { id: "unseal" });
+
+      // Get the encrypted balance ciphertext hash
+      const ctHash = await publicClient.readContract({
+        address: TOKEN_CONTRACT_ADDRESS,
+        abi: betTokenAbi,
+        functionName: "confidentialBalanceOf",
+        args: [address],
+      });
+
+      if (!ctHash || ctHash === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+        setUnsealedBalance("0");
+        toast.success("Balance unsealed!", { id: "unseal" });
+        setIsUnsealing(false);
+        return;
+      }
+
+      // Decrypt using the permit (view-only, no on-chain tx)
+      const result = await cofheClient.decryptForView(ctHash as `0x${string}`, FheTypes.Uint64).execute();
+      const decryptedValue = typeof result === "bigint" ? result : (result as any).decryptedValue ?? result;
+      const formatted = (Number(decryptedValue) / 1_000_000).toLocaleString();
+      setUnsealedBalance(formatted);
+
+      toast.success("Balance unsealed!", { id: "unseal" });
+    } catch (error) {
+      console.error("Failed to unseal balance:", error);
+      toast.error("Failed to unseal balance", { id: "unseal" });
+    } finally {
+      setIsUnsealing(false);
+    }
   };
 
-  // Format token balance (6 decimals)
-  const formattedEncryptedBalance = encryptedTokenBalance !== null
-    ? (Number(encryptedTokenBalance) / 1_000_000).toLocaleString()
-    : null;
+
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-display font-bold text-base-content uppercase tracking-wide">
-          Your Balances
-        </h2>
-        {isWalletConnected && (
-          <button
-            onClick={refreshBalances}
-            disabled={isRefreshing}
-            className="btn btn-ghost btn-sm"
-          >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
-          </button>
-        )}
-      </div>
-
-      {/* Wallet not connected warning */}
+    <div className="max-w-2xl mx-auto space-y-6">
       {!isWalletConnected && (
         <div className="alert alert-warning">
           <span className="font-display uppercase tracking-wide text-sm">
-            Please connect your wallet to mint test assets
+            Connect your wallet to mint test tokens
           </span>
         </div>
       )}
 
-      {/* CoFHE Status */}
+      {/* Encrypted Balance */}
       {isWalletConnected && (
-        <div className="flex items-center gap-2 text-sm">
-          <div className={`w-2 h-2 rounded-full ${isCofheInitialized ? "bg-green-500" : isCofheInitializing ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`} />
-          <span className="text-base-content/70">
-            {isCofheInitialized ? "FHE Ready" : isCofheInitializing ? "Initializing FHE..." : "FHE Not Initialized"}
-          </span>
-          <span className="text-base-content/30">|</span>
-          <button
-            onClick={() => setIsPermitModalOpen(true)}
-            className={`btn btn-xs gap-1 ${hasValidPermit ? "btn-primary" : "btn-outline"}`}
-          >
-            <Key className="w-3 h-3" />
-            {hasValidPermit ? "Permit Active" : "Manage Permit"}
-          </button>
-        </div>
-      )}
-
-      {/* Balances Display */}
-      {isWalletConnected && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* NFT Balance Card */}
-          <div className="bg-base-200 border border-base-300 p-6">
-            <div className="flex items-center gap-3 mb-4">
+        <div className="bg-base-200 border border-base-300 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
               <div className="p-2 bg-primary/10 border border-primary/30">
-                <ImageIcon className="w-5 h-5 text-primary" />
+                <Lock className="w-5 h-5 text-primary" />
               </div>
               <h2 className="text-lg font-display font-bold text-base-content uppercase tracking-wide">
-                NFT Balance
+                Confidential Balance
               </h2>
             </div>
-            <p className="text-3xl font-mono text-base-content mb-2">
-              {nftBalance.toString()}
-            </p>
-            <p className="text-sm text-base-content/50">Auction NFTs owned</p>
+            <button onClick={refreshBalance} disabled={isRefreshing} className="btn btn-ghost btn-sm">
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            </button>
           </div>
 
-          {/* Encrypted Token Balance Card */}
-          <div className="bg-base-200 border border-base-300 p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-accent/10 border border-accent/30">
-                <Lock className="w-5 h-5 text-accent" />
-              </div>
-              <h2 className="text-lg font-display font-bold text-base-content uppercase tracking-wide">
-                Encrypted Balance
-              </h2>
-            </div>
-            {encryptedTokenBalance !== null ? (
-              <>
-                <p className="text-3xl font-mono text-base-content mb-2">
-                  {formattedEncryptedBalance}
-                </p>
-                <p className="text-sm text-base-content/50">AUCT tokens (shielded)</p>
-              </>
-            ) : (
-              <>
-                <p className="text-3xl font-mono text-base-content/30 mb-2">
-                  ******
-                </p>
-                <button
-                  onClick={handleUnsealBalance}
-                  disabled={!isCofheInitialized || isUnsealing || isGeneratingPermit || /^0x0+$/.test(encryptedBalanceHash)}
-                  className="btn btn-sm btn-accent gap-2 font-display uppercase tracking-wide"
-                >
-                  {isUnsealing || isGeneratingPermit ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Unlock className="w-4 h-4" />
-                  )}
-                  {!hasValidPermit ? "Create Permit & Unseal" : "Unseal Balance"}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Mint Buttons */}
-      {isWalletConnected && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Mint NFT Button */}
-          <button
-            onClick={handleMintNft}
-            disabled={isLoading}
-            className="btn btn-primary btn-lg font-display uppercase tracking-wide"
-          >
-            {isLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <ImageIcon className="w-5 h-5" />
-            )}
-            Mint 1 NFT
-          </button>
-
-          {/* Mint Tokens Button */}
-          <button
-            onClick={handleMintTokens}
-            disabled={isLoading}
-            className="btn btn-secondary btn-lg font-display uppercase tracking-wide"
-          >
-            {isLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <Coins className="w-5 h-5" />
-            )}
-            Mint 1000 Tokens
-          </button>
-        </div>
-      )}
-
-      {/* Permit Section */}
-      {isWalletConnected && isCofheInitialized && !hasValidPermit && (
-        <div className="bg-accent/10 border border-accent/30 p-6">
-          <div className="flex items-start gap-4">
-            <Key className="w-6 h-6 text-accent mt-1" />
-            <div className="flex-1">
-              <h3 className="text-sm font-display font-bold text-base-content uppercase tracking-wide mb-2">
-                Create Permit to View Encrypted Balance
-              </h3>
-              <p className="text-sm text-base-content/70 mb-4">
-                A permit allows you to decrypt and view your encrypted token balance.
-                This requires signing a message with your wallet.
+          {/* Show unsealed balance or locked state */}
+          {unsealedBalance !== null ? (
+            <div>
+              <p className="text-4xl font-mono text-primary font-bold mb-1">
+                {unsealedBalance} <span className="text-lg text-base-content/50">AUCT</span>
               </p>
-              <button
-                onClick={generatePermit}
-                disabled={isGeneratingPermit}
-                className="btn btn-accent btn-sm gap-2 font-display uppercase tracking-wide"
-              >
-                {isGeneratingPermit ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Key className="w-4 h-4" />
-                )}
-                Create Permit
-              </button>
+              <p className="text-xs text-success flex items-center gap-1.5 mt-1">
+                <Unlock className="w-3 h-3" /> Unsealed with your permit — only you can see this
+              </p>
             </div>
-          </div>
+          ) : (
+            <div>
+              <p className="text-4xl font-mono text-base-content/30 font-bold mb-1 flex items-center gap-3">
+                <Lock className="w-8 h-8" /> ••••••
+              </p>
+              <p className="text-sm text-base-content/50 mt-2">
+                Your balance is encrypted on-chain via FHE
+              </p>
+            </div>
+          )}
+
+          {/* Permit status */}
+          {hasValidPermit && (
+            <div className="flex items-center gap-1.5 mt-3">
+              <div className="w-2 h-2 rounded-full bg-success animate-pulse"></div>
+              <span className="text-xs text-success font-mono">Decryption permit active</span>
+            </div>
+          )}
+
+          {/* Unseal button */}
+          <button
+            onClick={handleUnsealBalance}
+            disabled={isUnsealing || !isCofheReady}
+            className="btn btn-sm btn-ghost border border-primary/30 text-primary mt-4 font-display uppercase tracking-wide"
+          >
+            {isUnsealing ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Unlock className="w-4 h-4" />
+            )}
+            {unsealedBalance !== null ? "Refresh Balance" : "Unseal My Balance"}
+          </button>
         </div>
       )}
 
-      {/* Info Section */}
+      {/* Mint Button */}
+      {isWalletConnected && (
+        <button
+          onClick={handleMint}
+          disabled={isMinting}
+          className="btn btn-fhenix btn-lg w-full font-display uppercase tracking-wide"
+        >
+          {isMinting ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <Coins className="w-5 h-5" />
+          )}
+          Mint 1,000 AUCT Tokens
+        </button>
+      )}
+
+      {/* Info */}
       <div className="bg-base-200 border border-base-300 p-6">
         <h3 className="text-sm font-display font-bold text-base-content uppercase tracking-wide mb-3">
-          About Test Assets
+          How FHE Balances Work
         </h3>
-        <ul className="text-sm text-base-content/70 space-y-2">
-          <li>* <strong>Auction NFTs</strong> can be listed for auction</li>
-          <li>* <strong>AUCT tokens</strong> are used to place encrypted bids</li>
-          <li>* <strong>Public Balance</strong> is visible to everyone on-chain</li>
-          <li>* <strong>Encrypted Balance</strong> is private and requires a permit to view</li>
-          <li>* Use <strong>Shield</strong> to convert public tokens to encrypted tokens</li>
-          <li>* These are test assets on <strong>Arbitrum Sepolia</strong></li>
-        </ul>
+        <div className="space-y-2 text-sm text-base-content/70">
+          <p>
+            <span className="text-primary font-bold">Encrypted by default:</span> Your AUCT token balance is stored as encrypted data on-chain using Fully Homomorphic Encryption. No one can see it — not even block explorers.
+          </p>
+          <p>
+            <span className="text-primary font-bold">Only you can unseal:</span> Click "Unseal My Balance" to decrypt your balance using your wallet's permit. This happens client-side — the blockchain never sees your plaintext balance.
+          </p>
+          <p>
+            <span className="text-primary font-bold">Bets are confidential:</span> When you place a bet, encrypted tokens are transferred without revealing the amount. The pool totals are computed homomorphically on-chain.
+          </p>
+        </div>
       </div>
-
-      {/* Go to Auctions Button */}
-      <div className="flex justify-center pt-4">
-        <button
-          onClick={() => setMainTab("auctions")}
-          className="btn btn-primary btn-lg gap-2 font-display uppercase tracking-wide"
-        >
-          Go to Auctions
-          <ArrowRight className="w-5 h-5" />
-        </button>
-      </div>
-
-      {/* Permit Modal */}
-      <PermitModal
-        isOpen={isPermitModalOpen}
-        onClose={() => setIsPermitModalOpen(false)}
-      />
     </div>
   );
 };

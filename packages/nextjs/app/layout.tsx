@@ -5,8 +5,8 @@ import { Toaster } from "react-hot-toast";
 import { Analytics } from "@vercel/analytics/next";
 
 export const metadata: Metadata = {
-  title: "Sealed Bid Auction",
-  description: "Sealed Bid Auction built with FHE and COFHE",
+title: "CipherMarket",
+  description: "Privacy-preserving prediction markets powered by FHE",
 };
 
 export default function RootLayout({

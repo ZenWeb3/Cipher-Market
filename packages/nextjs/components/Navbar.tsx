@@ -3,15 +3,15 @@
 import { useAccount, useDisconnect } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import Image from "next/image";
-import { Wallet, LogOut, Gavel, Coins } from "lucide-react";
-import { ThemeToggle } from "./ThemeToggle";
-import { useAuctionStore } from "@/services/store/auctionStore";
+import { Wallet, LogOut, TrendingUp, Coins } from "lucide-react";
+
+import { useMarketStore } from "@/services/store/marketStore";
 
 export const Navbar = () => {
   const { isConnected, address } = useAccount();
   const { disconnect } = useDisconnect();
   const { openConnectModal } = useConnectModal();
-  const { mainTab, setMainTab } = useAuctionStore();
+  const { mainTab, setMainTab } = useMarketStore();
 
   return (
     <nav className="sticky top-0 z-50 bg-base-100/80 backdrop-blur-md border-b border-base-300">
@@ -19,28 +19,29 @@ export const Navbar = () => {
         <div className="flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-3">
-            <div className="relative h-8 w-[150px]">
-              {/* Logo for Light Mode (Dark Text) */}
-              <Image
-                src="/logo_light.svg"
-                alt="Fhenix Logo"
-                fill
-                className="object-contain theme-logo-light"
-                priority
-              />
-              {/* Logo for Dark Mode (White Text) */}
-              <Image
-                src="/fhenix_logo_dark.svg"
-                alt="Fhenix Logo"
-                fill
-                className="object-contain theme-logo-dark"
-                priority
-              />
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-primary/10 border border-primary/30 rounded-sm">
+                <TrendingUp className="w-5 h-5 text-primary" />
+              </div>
+              <span className="text-xl font-display font-bold text-base-content uppercase tracking-wider">
+                CipherMarket
+              </span>
             </div>
           </div>
 
           {/* Center - Tab Navigation */}
           <div className="hidden md:flex items-center gap-1 bg-base-200 p-1 rounded-sm border border-base-300">
+            <button
+              onClick={() => setMainTab("markets")}
+              className={`px-4 py-1.5 rounded-sm text-xs font-display uppercase tracking-wider font-bold flex items-center gap-2 transition-colors ${
+                mainTab === "markets"
+                  ? "btn-fhenix shadow-sm"
+                  : "hover:bg-base-300"
+              }`}
+            >
+              <TrendingUp className="w-4 h-4" />
+              <span className="hidden sm:inline">Markets</span>
+            </button>
             <button
               onClick={() => setMainTab("mint")}
               className={`px-4 py-1.5 rounded-sm text-xs font-display uppercase tracking-wider font-bold flex items-center gap-2 transition-colors ${
@@ -52,25 +53,11 @@ export const Navbar = () => {
               <Coins className="w-4 h-4" />
               <span className="hidden sm:inline">Mint</span>
             </button>
-            <button
-              onClick={() => setMainTab("auctions")}
-              className={`px-4 py-1.5 rounded-sm text-xs font-display uppercase tracking-wider font-bold flex items-center gap-2 transition-colors ${
-                mainTab === "auctions"
-                  ? "btn-fhenix shadow-sm"
-                  : "hover:bg-base-300"
-              }`}
-            >
-              <Gavel className="w-4 h-4" />
-              <span className="hidden sm:inline">Auctions</span>
-            </button>
           </div>
 
-          {/* Right side - Network & Wallet */}
+          {/* Right side */}
           <div className="flex items-center gap-3">
-            {/* Theme Toggle */}
-            <ThemeToggle />
-
-            {/* Wallet Connection */}
+      
             {isConnected && address ? (
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-2 px-3 py-2 bg-primary/10 border border-primary rounded-sm">
