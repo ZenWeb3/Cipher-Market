@@ -1,147 +1,327 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useAccount } from "wagmi";
-import { Search, Plus, User, TrendingUp, Loader2 } from "lucide-react";
-import { MarketList } from "./MarketList";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useAccount, usePublicClient } from "wagmi";
+import { MarketCard } from "./MarketCard";
 import { MarketDetail } from "./MarketDetail";
 import { CreateMarketForm } from "./CreateMarketForm";
-import { MarketCard } from "./MarketCard";
+import { SuccessModal } from "../SuccessModal";
 import { useMarket } from "@/hooks/useMarket";
-import { useMarketStore, MarketSubTab } from "@/services/store/marketStore";
-import { MarketData } from "@/utils/marketContracts";
+import { useMarketStore } from "@/services/store/marketStore";
+import {
+  MarketData,
+  MarketStatus,
+  getEffectiveStatus,
+} from "@/utils/marketContracts";
 
-const TABS: { id: MarketSubTab; label: string; icon: typeof Search }[] = [
-  { id: "browse", label: "Browse", icon: Search },
-  { id: "create", label: "Create", icon: Plus },
-  { id: "my-markets", label: "My Markets", icon: User },
-  { id: "my-bets", label: "My Bets", icon: TrendingUp },
-];
+type Tab = "all" | "create" | "my-bets";
 
-interface MyBetsViewProps {
-  address: `0x${string}`;
-  onSelectMarket: (market: MarketData) => void;
-}
+const ONE_HOUR = BigInt(3600);
 
-const MyBetsView = ({ address, onSelectMarket }: MyBetsViewProps) => {
-  const { getAllMarkets, getTotalMarkets, hasBetOnMarket } = useMarket();
-  const { refreshTrigger } = useMarketStore();
+/**
+ * Pure helper → all filtering logic lives here
+ */
+function categorizeMarkets(markets: MarketData[]) {
+  const now = BigInt(Math.floor(Date.now() / 1000));
 
-  const [markets, setMarkets] = useState<MarketData[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const loadMyBets = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const total = await getTotalMarkets();
-      const allMarkets = await getAllMarkets(BigInt(0), Number(total));
-
-      const betChecks = await Promise.all(
-        allMarkets.map(async (market) => ({
-          market,
-          hasBet: await hasBetOnMarket(market.id, address),
-        }))
-      );
-
-      const myBets = betChecks
-        .filter(({ hasBet }) => hasBet)
-        .map(({ market }) => market);
-
-      myBets.sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0));
-      setMarkets(myBets);
-    } catch (error) {
-      console.error("Failed to load bets:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [address, getAllMarkets, getTotalMarkets, hasBetOnMarket]);
-
-  useEffect(() => { loadMyBets(); }, [loadMyBets, refreshTrigger]);
-
-  if (isLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16">
-        <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
-        <p className="text-base-content/70 font-display uppercase tracking-wide">Loading your bets...</p>
-      </div>
-    );
-  }
-
-  if (markets.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 border border-base-300 bg-base-200">
-        <TrendingUp className="w-12 h-12 text-base-content/30 mb-4" />
-        <p className="text-base-content/70 font-display uppercase tracking-wide mb-2">No bets placed yet</p>
-        <p className="text-sm text-base-content/50">Browse markets and place your first encrypted bet</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {markets.map((market) => (
-        <MarketCard key={market.id.toString()} market={market} onClick={() => onSelectMarket(market)} />
-      ))}
-    </div>
+  const allActive = markets.filter(
+    (m) => getEffectiveStatus(m) === MarketStatus.Active
   );
-};
+
+  const endingSoon = allActive
+    .filter(
+      (m) => m.endTime > now && (m.endTime - now) <= ONE_HOUR
+    )
+    .sort((a, b) => Number(a.endTime - b.endTime));
+
+  const endingSoonIds = new Set(endingSoon.map((m) => m.id.toString()));
+
+  const active = allActive.filter(
+    (m) => !endingSoonIds.has(m.id.toString())
+  );
+
+  const closed = markets.filter((m) => {
+    const s = getEffectiveStatus(m);
+    return s === MarketStatus.Closed || s === MarketStatus.Resolved;
+  });
+
+  const settled = markets.filter(
+    (m) => getEffectiveStatus(m) === MarketStatus.Settled
+  );
+
+  return {
+    endingSoon,
+    active,
+    closed,
+    settled,
+  };
+}
 
 export const MarketsPage = () => {
   const { address } = useAccount();
-  const { marketSubTab, setMarketSubTab, selectedMarketId, setSelectedMarketId } = useMarketStore();
+  const publicClient = usePublicClient();
+  const { getAllMarkets, getTotalMarkets, hasBetOnMarket } = useMarket();
+  const { selectedMarketId, setSelectedMarketId, refreshTrigger } =
+    useMarketStore();
 
-  const handleSelectMarket = (market: MarketData) => setSelectedMarketId(market.id);
-  const handleBack = () => setSelectedMarketId(null);
+  const [tab, setTab] = useState<Tab>("all");
+  const [markets, setMarkets] = useState<MarketData[]>([]);
+  const [myBets, setMyBets] = useState<MarketData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [successModal, setSuccessModal] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
+
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const loadingRef = useRef(false);
+
+  const load = useCallback(async () => {
+    if (!publicClient || loadingRef.current) return;
+
+    loadingRef.current = true;
+     if (markets.length === 0) setLoading(true);
+
+    try {
+      const total = await getTotalMarkets();
+      const all = await getAllMarkets(BigInt(0), Number(total));
+
+      // stable descending sort
+      all.sort((a, b) => Number(b.id - a.id));
+
+      setMarkets(all);
+
+      if (address) {
+        const checks = await Promise.all(
+          all.map(async (m) => ({
+            m,
+            bet: await hasBetOnMarket(m.id, address),
+          }))
+        );
+
+        setMyBets(checks.filter((c) => c.bet).map((c) => c.m));
+      } else {
+        setMyBets([]);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      loadingRef.current = false;
+      setLoading(false);
+    }
+  }, [publicClient, address, getAllMarkets, getTotalMarkets, hasBetOnMarket]);
+
+  useEffect(() => {
+    load();
+  }, [load, refreshTrigger]);
+
+  useEffect(() => {
+    pollRef.current = setInterval(load, 12000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [load]);
+
+  const { endingSoon, active, closed, settled } = useMemo(
+    () => categorizeMarkets(markets),
+    [markets]
+  );
 
   if (selectedMarketId !== null) {
-    return <MarketDetail marketId={selectedMarketId} onBack={handleBack} />;
+    return (
+      <MarketDetail
+        marketId={selectedMarketId}
+        onBack={() => setSelectedMarketId(null)}
+        onActionSuccess={(title, message) =>
+          setSuccessModal({ title, message })
+        }
+      />
+    );
   }
 
+  const grid = (items: MarketData[]) => (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+        gap: 10,
+      }}
+    >
+      {items.map((m) => (
+        <MarketCard
+          key={m.id.toString()}
+          market={m}
+          onClick={() => setSelectedMarketId(m.id)}
+        />
+      ))}
+    </div>
+  );
+
+  const Section = ({
+    label,
+    count,
+    items,
+  }: {
+    label: string;
+    count: number;
+    items: MarketData[];
+  }) => {
+    if (items.length === 0) return null;
+
+    return (
+      <div style={{ marginBottom: 28 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 12,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              color: "var(--text-2)",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+            }}
+          >
+            {label}
+          </span>
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--text-3)",
+              fontFamily: "'JetBrains Mono'",
+            }}
+          >
+            {count}
+          </span>
+        </div>
+        {grid(items)}
+      </div>
+    );
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap gap-2 border-b border-base-300 pb-4">
-        {TABS.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = marketSubTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setMarketSubTab(tab.id)}
-              className={`btn btn-sm gap-2 font-display uppercase tracking-wide ${isActive ? "btn-primary" : "btn-ghost"}`}
-            >
-              <Icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          );
-        })}
+    <div className="fade-in">
+      {/* Header */}
+      <div style={{ marginBottom: 28 }}>
+        <h1
+          style={{
+            fontSize: 28,
+            fontWeight: 700,
+            letterSpacing: "-0.03em",
+            marginBottom: 4,
+          }}
+        >
+          Markets
+        </h1>
+        <p style={{ fontSize: 14, color: "var(--text-3)" }}>
+          Encrypted prediction markets on Base Sepolia
+        </p>
       </div>
 
-      <div>
-        {marketSubTab === "browse" && <MarketList onSelectMarket={handleSelectMarket} />}
-        {marketSubTab === "create" && <CreateMarketForm />}
-        {marketSubTab === "my-markets" && (
-          address ? (
-            <MarketList filterCreator={address} onSelectMarket={handleSelectMarket} />
-          ) : (
-            <div className="flex flex-col items-center justify-center py-16 border border-base-300 bg-base-200">
-              <User className="w-12 h-12 text-base-content/30 mb-4" />
-              <p className="text-base-content/70 font-display uppercase tracking-wide mb-2">Connect wallet</p>
-              <p className="text-sm text-base-content/50">Connect your wallet to view your markets</p>
-            </div>
-          )
-        )}
-        {marketSubTab === "my-bets" && (
-          address ? (
-            <MyBetsView address={address} onSelectMarket={handleSelectMarket} />
-          ) : (
-            <div className="flex flex-col items-center justify-center py-16 border border-base-300 bg-base-200">
-              <TrendingUp className="w-12 h-12 text-base-content/30 mb-4" />
-              <p className="text-base-content/70 font-display uppercase tracking-wide mb-2">Connect wallet</p>
-              <p className="text-sm text-base-content/50">Connect your wallet to view your bets</p>
-            </div>
-          )
-        )}
+      {/* Tabs */}
+      <div
+        style={{
+          display: "flex",
+          marginBottom: 24,
+          borderBottom: "1px solid var(--border)",
+        }}
+      >
+        {[
+          { id: "all" as Tab, label: "All Markets" },
+          { id: "create" as Tab, label: "Create" },
+          {
+            id: "my-bets" as Tab,
+            label: `My Bets${myBets.length ? ` · ${myBets.length}` : ""}`,
+          },
+        ].map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`tab ${tab === t.id ? "tab-active" : ""}`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
+
+      {/* Loading */}
+      {loading && (
+        <div
+          style={{
+            padding: "60px 0",
+            textAlign: "center",
+            color: "var(--text-3)",
+          }}
+        >
+          Loading...
+        </div>
+      )}
+
+      {/* All Markets */}
+      {tab === "all" && !loading && (
+        <div>
+          {!publicClient && (
+            <div style={{ padding: "48px 0", textAlign: "center" }}>
+              Connect wallet to browse
+            </div>
+          )}
+
+          {publicClient && markets.length === 0 && (
+            <div style={{ padding: "48px 0", textAlign: "center" }}>
+              No markets yet
+            </div>
+          )}
+
+          <Section label="Ending soon" count={endingSoon.length} items={endingSoon} />
+          <Section label="Active" count={active.length} items={active} />
+          <Section label="Awaiting resolution" count={closed.length} items={closed} />
+          <Section label="Settled" count={settled.length} items={settled} />
+        </div>
+      )}
+
+      {/* Create */}
+      {tab === "create" && (
+        <CreateMarketForm
+          onSuccess={() => {
+            setSuccessModal({
+              title: "Market Created",
+              message:
+                "Your prediction market is now live. Share it and start collecting bets.",
+            });
+            setTab("all");
+            load();
+          }}
+        />
+      )}
+
+      {/* My Bets */}
+      {tab === "my-bets" && !loading && (
+        !address ? (
+          <div style={{ padding: "48px 0", textAlign: "center" }}>
+            Connect wallet
+          </div>
+        ) : myBets.length === 0 ? (
+          <div style={{ padding: "48px 0", textAlign: "center" }}>
+            No bets yet
+          </div>
+        ) : (
+          grid(myBets)
+        )
+      )}
+
+      {/* Success Modal */}
+      {successModal && (
+        <SuccessModal
+          title={successModal.title}
+          message={successModal.message}
+          onClose={() => setSuccessModal(null)}
+        />
+      )}
     </div>
   );
 };

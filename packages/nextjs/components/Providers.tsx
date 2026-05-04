@@ -9,7 +9,7 @@ import "@rainbow-me/rainbowkit/styles.css";
 
 const queryClient = new QueryClient();
 
-function CofheInitializer({ children }: { children: React.ReactNode }) {
+function CofheInit({ children }: { children: React.ReactNode }) {
   useCofhe();
   return <>{children}</>;
 }
@@ -18,17 +18,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <WagmiProvider config={config} reconnectOnMount={true}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider
-          theme={darkTheme({
-            accentColor: "#00E5FF",
-            accentColorForeground: "#020617",
-            borderRadius: "small",
-            fontStack: "system",
-          })}
-        >
-          <CofheInitializer>
-            {children}
-          </CofheInitializer>
+        <RainbowKitProvider theme={darkTheme({
+          accentColor: "#fafafa",
+          accentColorForeground: "#000",
+          borderRadius: "medium",
+          fontStack: "system",
+          overlayBlur: "small",
+        })}>
+          <CofheInit>{children}</CofheInit>
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>

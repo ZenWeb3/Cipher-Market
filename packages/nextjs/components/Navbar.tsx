@@ -2,9 +2,6 @@
 
 import { useAccount, useDisconnect } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import Image from "next/image";
-import { Wallet, LogOut, TrendingUp, Coins } from "lucide-react";
-
 import { useMarketStore } from "@/services/store/marketStore";
 
 export const Navbar = () => {
@@ -14,76 +11,74 @@ export const Navbar = () => {
   const { mainTab, setMainTab } = useMarketStore();
 
   return (
-    <nav className="sticky top-0 z-50 bg-base-100/80 backdrop-blur-md border-b border-base-300">
-      <div className="max-w-7xl mx-auto px-4 md:px-8 py-4">
-        <div className="flex items-center justify-between">
-          {/* Logo */}
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 bg-primary/10 border border-primary/30 rounded-sm">
-                <TrendingUp className="w-5 h-5 text-primary" />
-              </div>
-              <span className="text-xl font-display font-bold text-base-content uppercase tracking-wider">
-                CipherMarket
-              </span>
-            </div>
+    <nav style={{
+      borderBottom: "1px solid var(--border)",
+      background: "rgba(0,0,0,0.85)",
+      backdropFilter: "blur(16px)",
+      position: "sticky", top: 0, zIndex: 40,
+    }}>
+      <div style={{
+        maxWidth: 1100, margin: "0 auto", padding: "0 24px",
+        height: 52, display: "flex", alignItems: "center", justifyContent: "space-between",
+      }}>
+        {/* Left: Logo + Nav */}
+        <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
+          <div
+            onClick={() => setMainTab("markets")}
+            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+          >
+      
+            <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.03em" }}>
+             <span style={{ color: "var(--text)" }}>Umbra</span>
+            </span>
           </div>
 
-          {/* Center - Tab Navigation */}
-          <div className="hidden md:flex items-center gap-1 bg-base-200 p-1 rounded-sm border border-base-300">
+          <div style={{ display: "flex", gap: 0 }}>
             <button
               onClick={() => setMainTab("markets")}
-              className={`px-4 py-1.5 rounded-sm text-xs font-display uppercase tracking-wider font-bold flex items-center gap-2 transition-colors ${
-                mainTab === "markets"
-                  ? "btn-fhenix shadow-sm"
-                  : "hover:bg-base-300"
-              }`}
+              className={`tab ${mainTab === "markets" ? "tab-active" : ""}`}
+              style={{ fontSize: 13, marginRight: 16 }}
             >
-              <TrendingUp className="w-4 h-4" />
-              <span className="hidden sm:inline">Markets</span>
+              Markets
             </button>
             <button
               onClick={() => setMainTab("mint")}
-              className={`px-4 py-1.5 rounded-sm text-xs font-display uppercase tracking-wider font-bold flex items-center gap-2 transition-colors ${
-                mainTab === "mint"
-                  ? "btn-fhenix shadow-sm"
-                  : "hover:bg-base-300"
-              }`}
+              className={`tab ${mainTab === "mint" ? "tab-active" : ""}`}
+              style={{ fontSize: 13 }}
             >
-              <Coins className="w-4 h-4" />
-              <span className="hidden sm:inline">Mint</span>
+              Faucet
             </button>
           </div>
+        </div>
 
-          {/* Right side */}
-          <div className="flex items-center gap-3">
-      
-            {isConnected && address ? (
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2 px-3 py-2 bg-primary/10 border border-primary rounded-sm">
-                  <Wallet className="w-4 h-4 text-primary" />
-                  <span className="text-base-content text-sm font-mono hidden sm:inline">
-                    {address.slice(0, 6)}...{address.slice(-4)}
-                  </span>
-                </div>
-                <button
-                  onClick={() => disconnect()}
-                  className="p-2 bg-base-200 border border-base-300 hover:border-red-500 hover:bg-red-500/10 rounded-sm transition-colors group"
-                  aria-label="Disconnect wallet"
-                >
-                  <LogOut className="w-4 h-4 text-base-content/50 group-hover:text-red-500" />
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => openConnectModal?.()}
-                className="flex items-center gap-2 px-4 py-2 btn-fhenix font-bold rounded-sm font-display uppercase text-sm"
-              >
-                <Wallet className="w-4 h-4" />
-                <span className="hidden sm:inline">Connect</span>
+        {/* Right: Wallet */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {isConnected && address ? (
+            <>
+              <span style={{
+                padding: "4px 8px", fontSize: 10, fontWeight: 600,
+                color: "var(--green-text)", background: "var(--green-dim)",
+                borderRadius: 100, border: "1px solid rgba(34,197,94,0.15)",
+              }}>
+                Base Sepolia
+              </span>
+              <span style={{
+                padding: "5px 10px", fontSize: 12,
+                fontFamily: "'JetBrains Mono'", color: "var(--text-2)",
+                background: "var(--surface)", border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+              }}>
+                {address.slice(0, 6)}...{address.slice(-4)}
+              </span>
+              <button onClick={() => disconnect()} className="btn" style={{ padding: "5px 10px", fontSize: 11 }}>
+                ×
               </button>
-            )}
-          </div>
+            </>
+          ) : (
+            <button onClick={() => openConnectModal?.()} className="btn btn-white" style={{ padding: "6px 16px", fontSize: 12 }}>
+              Connect
+            </button>
+          )}
         </div>
       </div>
     </nav>

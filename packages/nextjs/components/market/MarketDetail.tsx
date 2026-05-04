@@ -1,30 +1,29 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useCofhe } from "@/hooks/useCofhe";
 import { useAccount } from "wagmi";
-import {
-  ArrowLeft, Clock, Users, Lock, Trophy, Loader2,
-  CheckCircle, XCircle, Shield, TrendingUp, RefreshCw
-} from "lucide-react";
+import { useCofhe } from "@/hooks/useCofhe";
 import { useMarket } from "@/hooks/useMarket";
+import { BetModal } from "./BetModal";
+import { SuccessModal } from "../SuccessModal";
+import { MarketChat } from "./MarketChat";
 import {
   MarketData, MarketStatus, Outcome,
-  getEffectiveStatus, getEffectiveStatusColor, getEffectiveStatusLabel,
-  formatTokenAmount, getOutcomeLabel,
+  getEffectiveStatus, formatTokenAmount, getOutcomeLabel,
 } from "@/utils/marketContracts";
 
 interface MarketDetailProps {
   marketId: bigint;
   onBack: () => void;
+  onActionSuccess?: (title: string, message: string) => void;
 }
 
-export const MarketDetail = ({ marketId, onBack }: MarketDetailProps) => {
+export const MarketDetail = ({ marketId, onBack, onActionSuccess }: MarketDetailProps) => {
   const { address } = useAccount();
   const { isInitialized: isCofheReady } = useCofhe();
   const {
     getMarket, hasBetOnMarket, getBettorOutcome, hasClaimedFromMarket,
-    placeBet, resolveMarket, finalizeSettlement, claimWinnings, claimRefund,
+    resolveMarket, finalizeSettlement, claimWinnings, claimRefund,
     cancelMarket, isLoading,
   } = useMarket();
 
@@ -32,62 +31,52 @@ export const MarketDetail = ({ marketId, onBack }: MarketDetailProps) => {
   const [userHasBet, setUserHasBet] = useState(false);
   const [userOutcome, setUserOutcome] = useState<Outcome | null>(null);
   const [userHasClaimed, setUserHasClaimed] = useState(false);
-  const [isLoadingData, setIsLoadingData] = useState(true);
-  const [betAmount, setBetAmount] = useState("");
-  const [selectedOutcome, setSelectedOutcome] = useState<Outcome | null>(null);
-  const [isResolving, setIsResolving] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+  const [showBet, setShowBet] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const [resolveStep, setResolveStep] = useState("");
+  const [successModal, setSuccessModal] = useState<{ title: string; message: string } | null>(null);
 
-  // Auto-refresh polling
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
-  const loadData = useCallback(async () => {
+  const load = useCallback(async () => {
     const m = await getMarket(marketId);
     setMarket(m);
-
     if (address && m) {
-      const [hasBet, outcome, claimed] = await Promise.all([
+      const [bet, outcome, claimed] = await Promise.all([
         hasBetOnMarket(marketId, address),
         getBettorOutcome(marketId, address),
         hasClaimedFromMarket(marketId, address),
       ]);
-      setUserHasBet(hasBet);
-      setUserOutcome(hasBet ? outcome : null);
+      setUserHasBet(bet);
+      setUserOutcome(bet ? outcome : null);
       setUserHasClaimed(claimed);
     }
-    setIsLoadingData(false);
+    setLoadingData(false);
   }, [marketId, address, getMarket, hasBetOnMarket, getBettorOutcome, hasClaimedFromMarket]);
 
-  // Initial load
+  useEffect(() => { setLoadingData(true); load(); }, [load]);
   useEffect(() => {
-    setIsLoadingData(true);
-    loadData();
-  }, [loadData]);
+    pollRef.current = setInterval(load, 8000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [load]);
 
-  // Poll every 10 seconds for updates
-  useEffect(() => {
-    pollRef.current = setInterval(() => {
-      loadData();
-    }, 10000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [loadData]);
-
-  if (isLoadingData || !market) {
+  if (loadingData || !market) {
     return (
-      <div className="flex flex-col items-center justify-center py-16">
-        <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
-        <p className="text-base-content/70">Loading market...</p>
+      <div style={{ padding: "80px 0", textAlign: "center", color: "var(--text-3)" }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin" style={{ margin: "0 auto 8px", display: "block" }}>
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+        Loading...
       </div>
     );
   }
 
-  const effectiveStatus = getEffectiveStatus(market);
+  const eff = getEffectiveStatus(market);
   const isCreator = address?.toLowerCase() === market.creator.toLowerCase();
   const now = BigInt(Math.floor(Date.now() / 1000));
-  const hasStarted = now >= market.startTime;
   const hasEnded = now >= market.endTime;
+  const hasStarted = now >= market.startTime;
   const isActive = market.status === MarketStatus.Active && hasStarted && !hasEnded;
   const canBet = isActive && !userHasBet && !!address;
   const canResolve = isCreator && market.status === MarketStatus.Active && hasEnded && market.totalBets > BigInt(0);
@@ -97,367 +86,225 @@ export const MarketDetail = ({ marketId, onBack }: MarketDetailProps) => {
   const isLoser = isSettled && userHasBet && userOutcome !== market.winningOutcome;
   const canClaimWin = isWinner && !userHasClaimed;
   const canClaimRefund = isLoser && !userHasClaimed;
-  const canCancel = isCreator && market.status === MarketStatus.Active;
+  const noBets = market.status === MarketStatus.Active && hasEnded && market.totalBets === BigInt(0);
+  const busy = isLoading || resolving;
 
-  const handlePlaceBet = async () => {
-    if (selectedOutcome === null || !betAmount) return;
-    const amount = BigInt(Math.floor(parseFloat(betAmount) * 1_000_000));
-    const result = await placeBet(marketId, selectedOutcome, amount);
-    if (result) {
-      setBetAmount("");
-      setSelectedOutcome(null);
-      await loadData();
-    }
-  };
+  const total = Number(market.yesBettors) + Number(market.noBettors);
+  const yesPct = total > 0 ? Math.round((Number(market.yesBettors) / total) * 100) : 50;
 
-  // Combined resolve + finalize flow — one click does everything
-  const handleResolveAndFinalize = async (outcome: Outcome) => {
-    setIsResolving(true);
-    try {
-      // Step 1: Resolve
-      setResolveStep("Resolving market...");
-      const resolved = await resolveMarket(marketId, outcome);
-      if (!resolved) {
-        setIsResolving(false);
-        setResolveStep("");
-        return;
-      }
-
-      // Step 2: Auto-finalize
-      setResolveStep("Decrypting pool totals...");
-      // Small delay to let the chain state settle
-      await new Promise(r => setTimeout(r, 2000));
-
-      const finalized = await finalizeSettlement(marketId);
-      if (!finalized) {
-        setResolveStep("Resolution complete. Please click 'Decrypt & Finalize' to finish.");
-        await loadData();
-        setIsResolving(false);
-        return;
-      }
-
-      setResolveStep("");
-      await loadData();
-    } catch (error) {
-      console.error("Resolve flow failed:", error);
-      setResolveStep("");
-      await loadData();
-    } finally {
-      setIsResolving(false);
-    }
+  const handleResolve = async (outcome: Outcome) => {
+    setResolving(true);
+    setResolveStep("Resolving...");
+    const ok = await resolveMarket(marketId, outcome);
+    if (!ok) { setResolving(false); setResolveStep(""); return; }
+    setResolveStep("Decrypting pools...");
+    await new Promise(r => setTimeout(r, 2000));
+    const fin = await finalizeSettlement(marketId);
+    setResolveStep("");
+    setResolving(false);
+    await load();
+    if (fin) setSuccessModal({ title: "Market Settled", message: `${getOutcomeLabel(outcome)} wins. Pool totals have been decrypted and are now visible.` });
   };
 
   const handleFinalize = async () => {
-    const result = await finalizeSettlement(marketId);
-    if (result) await loadData();
+    const ok = await finalizeSettlement(marketId);
+    if (ok) { await load(); setSuccessModal({ title: "Settlement Complete", message: "Pool totals decrypted successfully." }); }
   };
 
-  const handleClaimWin = async () => {
-    const result = await claimWinnings(marketId);
-    if (result) await loadData();
+  const handleClaim = async () => {
+    const ok = await claimWinnings(marketId);
+    if (ok) { await load(); setSuccessModal({ title: "Winnings Claimed", message: "Your encrypted bet has been returned to your wallet." }); }
   };
 
-  const handleClaimRefund = async () => {
-    const result = await claimRefund(marketId);
-    if (result) await loadData();
+  const handleRefund = async () => {
+    const ok = await claimRefund(marketId);
+    if (ok) { await load(); setSuccessModal({ title: "Refund Claimed", message: "Your bet has been returned to your wallet." }); }
   };
 
-  const handleCancel = async () => {
-    const result = await cancelMarket(marketId);
-    if (result) onBack();
+  const statusBadge: Record<number, { cls: string; label: string }> = {
+    [MarketStatus.Active]: { cls: "badge-live", label: "Live" },
+    [MarketStatus.Closed]: { cls: "badge-closed", label: "Closed" },
+    [MarketStatus.Resolved]: { cls: "badge-resolving", label: "Resolving" },
+    [MarketStatus.Settled]: { cls: "badge-settled", label: "Settled" },
+    [MarketStatus.Cancelled]: { cls: "badge-cancelled", label: "Cancelled" },
   };
-
-  const isBusy = isLoading || isResolving;
+  const sb = statusBadge[eff] || { cls: "", label: "" };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      {/* Back button */}
-      <div className="flex items-center justify-between">
-        <button onClick={onBack} className="btn btn-ghost btn-sm gap-2 font-display uppercase tracking-wide">
-          <ArrowLeft className="w-4 h-4" /> Back to markets
-        </button>
-        <button onClick={loadData} className="btn btn-ghost btn-sm" title="Refresh">
-          <RefreshCw className="w-4 h-4" />
-        </button>
-      </div>
+    <div style={{ maxWidth: 640, margin: "0 auto" }} className="fade-in">
+      {/* Back */}
+      <button onClick={onBack} className="btn" style={{ marginBottom: 20, padding: "5px 12px", fontSize: 12 }}>
+        ← Back
+      </button>
 
-      {/* Market Header */}
-      <div className="bg-base-200 border border-base-300 p-6">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary/10 border border-primary/30">
-              <TrendingUp className="w-6 h-6 text-primary" />
-            </div>
-            <span className="text-xs font-mono text-base-content/50">Market #{market.id.toString()}</span>
-          </div>
-          <span className={`badge ${getEffectiveStatusColor(market)} badge-md font-display uppercase tracking-wide`}>
-            {getEffectiveStatusLabel(market)}
+      {/* Main */}
+      <div className="card" style={{ padding: 28, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <span style={{ fontSize: 12, color: "var(--text-3)", fontFamily: "'JetBrains Mono'" }}>#{market.id.toString()}</span>
+          <span className={`badge ${sb.cls}`}>
+            {sb.label === "Live" && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--green)", display: "inline-block" }} />}
+            {sb.label}
           </span>
         </div>
 
-        <h1 className="text-2xl md:text-3xl font-display font-bold text-base-content leading-tight mb-6">
+        <h1 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, marginBottom: 20, letterSpacing: "-0.02em" }}>
           {market.question}
         </h1>
 
-        {/* Pool Display */}
-        <div className="grid grid-cols-2 gap-3 mb-6">
-          <div className="bg-success/10 border border-success/20 rounded-sm p-4">
-            <div className="text-[10px] font-pixel text-success uppercase tracking-widest mb-2">Yes Pool</div>
-            {isSettled ? (
-              <div className="text-xl font-mono font-bold text-success">
-                {formatTokenAmount(market.decryptedYesPool)} <span className="text-sm">AUCT</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-success/70">
-                <Lock className="w-4 h-4" />
-                <span className="text-sm font-mono">Encrypted</span>
-              </div>
-            )}
-            <div className="text-xs text-success/60 mt-1">{market.yesBettors.toString()} bettors</div>
+        {/* Yes/No bar */}
+        <div style={{ display: "flex", height: 40, borderRadius: 8, overflow: "hidden", gap: 2, marginBottom: 18 }}>
+          <div style={{ flex: yesPct, background: "var(--green-dim)", display: "flex", alignItems: "center", justifyContent: "center", minWidth: 50, borderRadius: "8px 0 0 8px" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--green-text)" }}>Yes {yesPct}%</span>
           </div>
-          <div className="bg-error/10 border border-error/20 rounded-sm p-4">
-            <div className="text-[10px] font-pixel text-error uppercase tracking-widest mb-2">No Pool</div>
-            {isSettled ? (
-              <div className="text-xl font-mono font-bold text-error">
-                {formatTokenAmount(market.decryptedNoPool)} <span className="text-sm">AUCT</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-error/70">
-                <Lock className="w-4 h-4" />
-                <span className="text-sm font-mono">Encrypted</span>
-              </div>
-            )}
-            <div className="text-xs text-error/60 mt-1">{market.noBettors.toString()} bettors</div>
+          <div style={{ flex: 100 - yesPct, background: "var(--red-dim)", display: "flex", alignItems: "center", justifyContent: "center", minWidth: 50, borderRadius: "0 8px 8px 0" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--red-text)" }}>No {100 - yesPct}%</span>
           </div>
         </div>
 
-        {/* Winner Banner */}
+        {/* Pools (settled) */}
         {isSettled && (
-          <div className="flex items-center gap-3 p-4 bg-primary/10 border border-primary/20 rounded-sm mb-6">
-            <Trophy className="w-6 h-6 text-primary" />
-            <div>
-              <span className="font-display text-primary font-bold uppercase tracking-wide">
-                Winner: {getOutcomeLabel(market.winningOutcome)}
-              </span>
-              <p className="text-xs text-base-content/50 mt-0.5">
-                Total pool: {formatTokenAmount(market.decryptedYesPool + market.decryptedNoPool)} AUCT
-              </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+            <div style={{ padding: 12, background: "var(--green-dim)", borderRadius: 8, textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: "var(--green-text)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Yes Pool</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--green-text)", fontFamily: "'JetBrains Mono'" }}>{formatTokenAmount(market.decryptedYesPool)}</div>
+            </div>
+            <div style={{ padding: 12, background: "var(--red-dim)", borderRadius: 8, textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: "var(--red-text)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>No Pool</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--red-text)", fontFamily: "'JetBrains Mono'" }}>{formatTokenAmount(market.decryptedNoPool)}</div>
             </div>
           </div>
         )}
 
+        {/* Winner */}
+        {isSettled && (
+          <div style={{ padding: "8px 12px", background: "var(--surface-2)", borderRadius: 6, marginBottom: 16, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 14 }}>✓</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-2)" }}>
+              {getOutcomeLabel(market.winningOutcome)} won · {formatTokenAmount(market.decryptedYesPool + market.decryptedNoPool)} AUCT total
+            </span>
+          </div>
+        )}
+
         {/* Stats */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="text-center p-3 bg-base-300/50 rounded-sm">
-            <Users className="w-4 h-4 mx-auto text-primary mb-1" />
-            <div className="text-lg font-mono font-bold">{market.totalBets.toString()}</div>
-            <div className="text-[10px] font-pixel text-base-content/50 uppercase">Total bets</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'JetBrains Mono'" }}>{market.totalBets.toString()}</div>
+            <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 2, textTransform: "uppercase" }}>Bets</div>
           </div>
-          <div className="text-center p-3 bg-base-300/50 rounded-sm">
-            <Clock className="w-4 h-4 mx-auto text-primary mb-1" />
-            <div className="text-sm font-mono font-bold">
-              {new Date(Number(market.endTime) * 1000).toLocaleDateString()}
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "'JetBrains Mono'" }}>
+              {new Date(Number(market.endTime) * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
-            <div className="text-[10px] font-pixel text-base-content/50 uppercase">End date</div>
+            <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 2, textTransform: "uppercase" }}>Ends</div>
           </div>
-          <div className="text-center p-3 bg-base-300/50 rounded-sm">
-            <Shield className="w-4 h-4 mx-auto text-primary mb-1" />
-            <div className="text-sm font-mono font-bold">FHE</div>
-            <div className="text-[10px] font-pixel text-base-content/50 uppercase">Privacy</div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" strokeWidth="2" style={{ verticalAlign: "-1px", marginRight: 3 }}>
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              FHE
+            </div>
+            <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 2, textTransform: "uppercase" }}>Privacy</div>
           </div>
         </div>
       </div>
 
-      {/* User Status */}
+      {/* User status */}
       {userHasBet && (
-        <div className={`border p-4 rounded-sm flex items-center gap-3 ${
-          isWinner ? "bg-success/10 border-success/20" :
-          isLoser ? "bg-error/10 border-error/20" :
-          "bg-info/10 border-info/20"
-        }`}>
-          {isWinner ? <CheckCircle className="w-5 h-5 text-success" /> :
-           isLoser ? <XCircle className="w-5 h-5 text-error" /> :
-           <Lock className="w-5 h-5 text-info" />}
-          <div>
-            <p className="font-display uppercase tracking-wide text-sm font-bold">
-              {isWinner ? "You won!" : isLoser ? "You lost" : `You bet ${getOutcomeLabel(userOutcome!)}`}
-            </p>
-            <p className="text-xs text-base-content/50">
-              {userHasClaimed ? "Already claimed" :
-               canClaimWin ? "Claim your winnings below" :
-               canClaimRefund ? "Claim your refund below" :
-               "Your bet is encrypted and sealed"}
-            </p>
+        <div className="card" style={{
+          padding: "12px 16px", marginBottom: 12,
+          borderColor: isWinner ? "rgba(34,197,94,0.2)" : isLoser ? "rgba(239,68,68,0.2)" : "var(--border)",
+          background: isWinner ? "var(--green-dim)" : isLoser ? "var(--red-dim)" : "var(--surface)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span>{isWinner ? "🎉" : isLoser ? "✗" : "🔒"}</span>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>
+                {isWinner ? "You won!" : isLoser ? "You lost" : `You bet ${getOutcomeLabel(userOutcome!)}`}
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-3)", marginLeft: 8 }}>
+                {userHasClaimed ? "Claimed" : canClaimWin ? "Claim below" : canClaimRefund ? "Refund below" : "Sealed"}
+              </span>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Place Bet */}
+      {/* No bets message */}
+      {noBets && (
+        <div className="card" style={{ padding: "16px 20px", marginBottom: 12, textAlign: "center" }}>
+          <span style={{ fontSize: 13, color: "var(--text-3)" }}>No bets were placed on this market</span>
+        </div>
+      )}
+      
+ <MarketChat marketId={marketId} userHasBet={userHasBet} isSettled={isSettled} />
+      {/* Bet button */}
       {canBet && (
-        <div className="bg-base-200 border border-base-300 p-6">
-          <h3 className="text-lg font-display font-bold text-base-content uppercase tracking-wide mb-4">
-            Place Your Bet
-          </h3>
-
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <button
-              onClick={() => setSelectedOutcome(Outcome.Yes)}
-              disabled={isBusy}
-              className={`p-4 rounded-sm border-2 transition-all font-display uppercase tracking-wide font-bold ${
-                selectedOutcome === Outcome.Yes
-                  ? "border-success bg-success/10 text-success shadow-lg shadow-success/10"
-                  : "border-base-300 hover:border-success/50 text-base-content/70"
-              }`}
-            >
-              <CheckCircle className={`w-6 h-6 mx-auto mb-2 ${selectedOutcome === Outcome.Yes ? "text-success" : "text-base-content/30"}`} />
-              Yes
-            </button>
-            <button
-              onClick={() => setSelectedOutcome(Outcome.No)}
-              disabled={isBusy}
-              className={`p-4 rounded-sm border-2 transition-all font-display uppercase tracking-wide font-bold ${
-                selectedOutcome === Outcome.No
-                  ? "border-error bg-error/10 text-error shadow-lg shadow-error/10"
-                  : "border-base-300 hover:border-error/50 text-base-content/70"
-              }`}
-            >
-              <XCircle className={`w-6 h-6 mx-auto mb-2 ${selectedOutcome === Outcome.No ? "text-error" : "text-base-content/30"}`} />
-              No
-            </button>
-          </div>
-
-          <div className="form-control mb-4">
-            <label className="label">
-              <span className="label-text font-pixel uppercase tracking-widest text-xs">Amount (AUCT)</span>
-            </label>
-            <input
-              type="number"
-              value={betAmount}
-              onChange={(e) => setBetAmount(e.target.value)}
-              placeholder="100"
-              className="input input-bordered font-mono no-spinners"
-              min="0"
-              disabled={isBusy}
-            />
-          </div>
-
-          <div className="flex items-start gap-2 p-3 bg-primary/5 border border-primary/20 rounded-sm mb-4">
-            <Lock className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-            <p className="text-xs text-base-content/60">
-              Your bet amount and choice are fully encrypted via FHE. No one — not even the market
-              creator — can see your position until the market is settled.
-            </p>
-          </div>
-
-          <button
-            onClick={handlePlaceBet}
-            disabled={selectedOutcome === null || !betAmount || isBusy}
-            className={`btn w-full font-display uppercase tracking-wide ${
-              selectedOutcome === Outcome.Yes ? "bg-success hover:bg-success/80 text-success-content" :
-              selectedOutcome === Outcome.No ? "bg-error hover:bg-error/80 text-error-content" :
-              "btn-fhenix"
-            }`}
-          >
-            {isBusy ? <Loader2 className="w-5 h-5 animate-spin" /> : <Lock className="w-5 h-5" />}
-            {selectedOutcome !== null ? `Place Encrypted ${getOutcomeLabel(selectedOutcome)} Bet` : "Select an outcome"}
-          </button>
-        </div>
+        <button onClick={() => setShowBet(true)} className="btn btn-white"
+          style={{ width: "100%", padding: "13px", fontSize: 15, marginBottom: 12 }}>
+          Place Encrypted Bet
+        </button>
       )}
 
-      {/* Creator: Resolve + Auto-Finalize (one click) */}
+      {/* Resolve */}
       {canResolve && (
-        <div className="bg-base-200 border border-base-300 p-6">
-          <h3 className="text-lg font-display font-bold text-base-content uppercase tracking-wide mb-2">
-            Resolve Market
-          </h3>
-          <p className="text-sm text-base-content/50 mb-4">
-            Select the winning outcome. This will resolve the market and automatically decrypt the pool totals.
-          </p>
-
+        <div className="card" style={{ padding: 20, marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Resolve</div>
+          <p style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 14 }}>Select winner. Pools decrypt automatically.</p>
           {resolveStep && (
-            <div className="flex items-center gap-3 p-3 bg-info/10 border border-info/20 rounded-sm mb-4">
-              <Loader2 className="w-4 h-4 text-info animate-spin shrink-0" />
-              <p className="text-sm text-info font-mono">{resolveStep}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", background: "var(--surface-2)", borderRadius: 6, marginBottom: 12, fontSize: 12, color: "var(--text-2)" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+              {resolveStep}
             </div>
           )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => handleResolveAndFinalize(Outcome.Yes)}
-              disabled={isBusy}
-              className="btn bg-success hover:bg-success/80 text-success-content font-display uppercase tracking-wide"
-            >
-              {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-              Yes Wins
-            </button>
-            <button
-              onClick={() => handleResolveAndFinalize(Outcome.No)}
-              disabled={isBusy}
-              className="btn bg-error hover:bg-error/80 text-error-content font-display uppercase tracking-wide"
-            >
-              {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-              No Wins
-            </button>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <button onClick={() => handleResolve(Outcome.Yes)} disabled={busy} className="btn btn-green" style={{ padding: "10px" }}>Yes Wins</button>
+            <button onClick={() => handleResolve(Outcome.No)} disabled={busy} className="btn btn-red" style={{ padding: "10px" }}>No Wins</button>
           </div>
         </div>
       )}
 
-      {/* Finalize Settlement (fallback if auto-finalize failed) */}
-      {canFinalize && !isResolving && (
-        <div className="bg-base-200 border border-base-300 p-6">
-          <h3 className="text-lg font-display font-bold text-base-content uppercase tracking-wide mb-2">
-            Finalize Settlement
-          </h3>
-          <p className="text-sm text-base-content/50 mb-4">
-            Decrypt pool totals and finalize the market results.
-          </p>
-          <button
-            onClick={handleFinalize}
-            disabled={isBusy}
-            className="btn btn-fhenix w-full font-display uppercase tracking-wide"
-          >
-            {isBusy ? <Loader2 className="w-5 h-5 animate-spin" /> : <Shield className="w-5 h-5" />}
-            Decrypt & Finalize
-          </button>
-        </div>
+      {/* Finalize fallback */}
+      {canFinalize && !resolving && (
+        <button onClick={handleFinalize} disabled={busy} className="btn btn-white"
+          style={{ width: "100%", padding: "12px", marginBottom: 12 }}>
+          Decrypt & Finalize
+        </button>
       )}
 
-      {/* Claim Actions */}
-      {(canClaimWin || canClaimRefund) && (
-        <div className="bg-base-200 border border-base-300 p-6">
-          {canClaimWin && (
-            <button
-              onClick={handleClaimWin}
-              disabled={isBusy}
-              className="btn bg-success hover:bg-success/80 text-success-content w-full font-display uppercase tracking-wide"
-            >
-              {isBusy ? <Loader2 className="w-5 h-5 animate-spin" /> : <Trophy className="w-5 h-5" />}
-              Claim Winnings
-            </button>
-          )}
-          {canClaimRefund && (
-            <button
-              onClick={handleClaimRefund}
-              disabled={isBusy}
-              className="btn btn-ghost border border-base-300 w-full font-display uppercase tracking-wide"
-            >
-              {isBusy ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
-              Claim Refund
-            </button>
-          )}
-        </div>
+      {/* Claim */}
+      {canClaimWin && (
+        <button onClick={handleClaim} disabled={busy} className="btn btn-green"
+          style={{ width: "100%", padding: "13px", fontSize: 15, marginBottom: 12 }}>
+          Claim Winnings
+        </button>
+      )}
+      {canClaimRefund && (
+        <button onClick={handleRefund} disabled={busy} className="btn"
+          style={{ width: "100%", padding: "12px", marginBottom: 12 }}>
+          Claim Refund
+        </button>
       )}
 
       {/* Cancel */}
-      {canCancel && market.totalBets === BigInt(0) && (
-        <button
-          onClick={handleCancel}
-          disabled={isBusy}
-          className="btn btn-ghost btn-sm text-error font-display uppercase tracking-wide"
-        >
+      {isCreator && market.status === MarketStatus.Active && market.totalBets === BigInt(0) && (
+        <button onClick={async () => { const ok = await cancelMarket(marketId); if (ok) onBack(); }} disabled={busy}
+          style={{ background: "none", border: "none", color: "var(--red-text)", fontSize: 12, cursor: "pointer", padding: "8px 0" }}>
           Cancel Market
         </button>
       )}
+
+      {/* Bet modal */}
+      {showBet && (
+        <BetModal market={market} onClose={() => setShowBet(false)} onSuccess={() => {
+          load();
+          setSuccessModal({ title: "Bet Placed", message: "Your bet has been encrypted and sealed on-chain. No one can see your position." });
+        }} />
+      )}
+
+      {/* Success modal */}
+      {successModal && <SuccessModal title={successModal.title} message={successModal.message} onClose={() => setSuccessModal(null)} />}
     </div>
   );
 };

@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
-import { Coins, Loader2, RefreshCw, Lock, Unlock } from "lucide-react";
 import toast from "react-hot-toast";
 import { FheTypes } from "@cofhe/sdk";
 import { betTokenAbi } from "@/utils/marketContracts";
@@ -10,6 +9,7 @@ import { toastTxSuccess } from "@/utils/explorerLink";
 import { usePermit } from "@/hooks/usePermit";
 import { cofheClient } from "@/services/cofhe-client";
 import { useCofhe } from "@/hooks/useCofhe";
+import { SuccessModal } from "../SuccessModal";
 
 const TOKEN_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_TOKEN_CONTRACT_ADDRESS as `0x${string}`;
 const MINT_AMOUNT = BigInt(1000 * 1_000_000);
@@ -19,221 +19,126 @@ export const MintPage = () => {
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
   const { isInitialized: isCofheReady } = useCofhe();
-  const { hasValidPermit, generatePermit, isGeneratingPermit } = usePermit();
+  const { hasValidPermit, generatePermit } = usePermit();
 
-  const [unsealedBalance, setUnsealedBalance] = useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isMinting, setIsMinting] = useState(false);
-  const [isUnsealing, setIsUnsealing] = useState(false);
-
-  const isWalletConnected = !!address;
-
-  const refreshBalance = useCallback(async () => {
-    if (!publicClient || !address) return;
-    setIsRefreshing(true);
-    try {
-      const balance = await publicClient.readContract({
-        address: TOKEN_CONTRACT_ADDRESS,
-        abi: betTokenAbi,
-        functionName: "balanceOf",
-        args: [address],
-        blockTag: "latest",
-      });
-    } catch (error) {
-      console.error("Failed to get balance:", error);
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [publicClient, address]);
-
-
+  const [balance, setBalance] = useState<string | null>(null);
+  const [minting, setMinting] = useState(false);
+  const [unsealing, setUnsealing] = useState(false);
+  const [successModal, setSuccessModal] = useState<{ title: string; message: string } | null>(null);
 
   const handleMint = async () => {
-    if (!walletClient || !address || !publicClient) {
-      toast.error("Wallet not connected");
-      return;
-    }
-    setIsMinting(true);
+    if (!walletClient || !address || !publicClient) return;
+    setMinting(true);
     try {
-      toast.loading("Minting 1,000 AUCT tokens...", { id: "mint-tokens" });
+      toast.loading("Minting...", { id: "mint" });
       const hash = await walletClient.writeContract({
-        address: TOKEN_CONTRACT_ADDRESS,
-        abi: betTokenAbi,
-        functionName: "mint",
-        args: [address, MINT_AMOUNT],
+        address: TOKEN_CONTRACT_ADDRESS, abi: betTokenAbi,
+        functionName: "mint", args: [address, MINT_AMOUNT],
       });
       await publicClient.waitForTransactionReceipt({ hash });
-      toastTxSuccess("1,000 AUCT minted!", hash, "mint-tokens");
-      setUnsealedBalance(null);
-      setUnsealedBalance(null); // Reset unsealed since it changed
-      setTimeout(() => handleUnsealBalance(), 500);
-    } catch (error) {
-      console.error("Failed to mint:", error);
-      toast.error("Failed to mint tokens", { id: "mint-tokens" });
-    } finally {
-      setIsMinting(false);
-    }
+      toast.dismiss("mint");
+      setBalance(null);
+      setSuccessModal({ title: "Tokens Minted", message: "1,000 AUCT tokens have been added to your encrypted balance." });
+    } catch (e) {
+      console.error(e);
+      toast.error("Mint failed", { id: "mint" });
+    } finally { setMinting(false); }
   };
 
-  const handleUnsealBalance = async () => {
-    if (!publicClient || !address || !isCofheReady) {
-      toast.error("CoFHE not ready");
-      return;
-    }
-
-    setIsUnsealing(true);
+  const handleUnseal = useCallback(async () => {
+    if (!publicClient || !address || !isCofheReady) return;
+    setUnsealing(true);
     try {
-      // Ensure we have a permit
       if (!hasValidPermit) {
-        toast.loading("Generating decryption permit...", { id: "unseal" });
-        const result = await generatePermit();
-        if (!result.success) {
-          toast.error("Failed to generate permit", { id: "unseal" });
-          setIsUnsealing(false);
-          return;
-        }
+        toast.loading("Generating permit...", { id: "unseal" });
+        const r = await generatePermit();
+        if (!r.success) { toast.error("Permit failed", { id: "unseal" }); setUnsealing(false); return; }
         toast.dismiss("unseal");
       }
-
-      toast.loading("Unsealing your encrypted balance...", { id: "unseal" });
-
-      // Get the encrypted balance ciphertext hash
-      const ctHash = await publicClient.readContract({
-        address: TOKEN_CONTRACT_ADDRESS,
-        abi: betTokenAbi,
-        functionName: "confidentialBalanceOf",
-        args: [address],
+      toast.loading("Unsealing...", { id: "unseal" });
+      const ct = await publicClient.readContract({
+        address: TOKEN_CONTRACT_ADDRESS, abi: betTokenAbi,
+        functionName: "confidentialBalanceOf", args: [address],
       });
-
-      if (!ctHash || ctHash === "0x0000000000000000000000000000000000000000000000000000000000000000") {
-        setUnsealedBalance("0");
-        toast.success("Balance unsealed!", { id: "unseal" });
-        setIsUnsealing(false);
-        return;
+      if (!ct || ct === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+        setBalance("0"); toast.dismiss("unseal"); setUnsealing(false); return;
       }
+      const result = await cofheClient.decryptForView(ct as `0x${string}`, FheTypes.Uint64).execute();
+      const val = typeof result === "bigint" ? result : (result as any).decryptedValue ?? result;
+      setBalance((Number(val) / 1_000_000).toLocaleString());
+      toast.dismiss("unseal");
+    } catch (e) {
+      console.error(e);
+      toast.error("Unseal failed", { id: "unseal" });
+    } finally { setUnsealing(false); }
+  }, [publicClient, address, isCofheReady, hasValidPermit, generatePermit]);
 
-      // Decrypt using the permit (view-only, no on-chain tx)
-      const result = await cofheClient.decryptForView(ctHash as `0x${string}`, FheTypes.Uint64).execute();
-      const decryptedValue = typeof result === "bigint" ? result : (result as any).decryptedValue ?? result;
-      const formatted = (Number(decryptedValue) / 1_000_000).toLocaleString();
-      setUnsealedBalance(formatted);
-
-      toast.success("Balance unsealed!", { id: "unseal" });
-    } catch (error) {
-      console.error("Failed to unseal balance:", error);
-      toast.error("Failed to unseal balance", { id: "unseal" });
-    } finally {
-      setIsUnsealing(false);
-    }
-  };
-
-
+  if (!address) {
+    return (
+      <div className="fade-in" style={{ maxWidth: 480, margin: "0 auto" }}>
+        <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.03em", marginBottom: 4 }}>Faucet</h1>
+        <p style={{ color: "var(--text-3)", fontSize: 13, marginTop: 8 }}>Connect wallet to mint test tokens</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      {!isWalletConnected && (
-        <div className="alert alert-warning">
-          <span className="font-display uppercase tracking-wide text-sm">
-            Connect your wallet to mint test tokens
-          </span>
-        </div>
-      )}
+    <div className="fade-in" style={{ maxWidth: 480, margin: "0 auto" }}>
+      <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.03em", marginBottom: 4 }}>Faucet</h1>
+      <p style={{ color: "var(--text-3)", fontSize: 13, marginBottom: 28 }}>Get AUCT tokens to bet on markets</p>
 
-      {/* Encrypted Balance */}
-      {isWalletConnected && (
-        <div className="bg-base-200 border border-base-300 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-primary/10 border border-primary/30">
-                <Lock className="w-5 h-5 text-primary" />
+      {/* Balance */}
+      <div className="card" style={{ padding: 24, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Your Balance</div>
+            {balance !== null ? (
+              <div style={{ fontSize: 32, fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "var(--text)" }}>
+                {balance} <span style={{ fontSize: 14, color: "var(--text-3)" }}>AUCT</span>
               </div>
-              <h2 className="text-lg font-display font-bold text-base-content uppercase tracking-wide">
-                Confidential Balance
-              </h2>
-            </div>
-            <button onClick={refreshBalance} disabled={isRefreshing} className="btn btn-ghost btn-sm">
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            </button>
-          </div>
-
-          {/* Show unsealed balance or locked state */}
-          {unsealedBalance !== null ? (
-            <div>
-              <p className="text-4xl font-mono text-primary font-bold mb-1">
-                {unsealedBalance} <span className="text-lg text-base-content/50">AUCT</span>
-              </p>
-              <p className="text-xs text-success flex items-center gap-1.5 mt-1">
-                <Unlock className="w-3 h-3" /> Unsealed with your permit — only you can see this
-              </p>
-            </div>
-          ) : (
-            <div>
-              <p className="text-4xl font-mono text-base-content/30 font-bold mb-1 flex items-center gap-3">
-                <Lock className="w-8 h-8" /> ••••••
-              </p>
-              <p className="text-sm text-base-content/50 mt-2">
-                Your balance is encrypted on-chain via FHE
-              </p>
-            </div>
-          )}
-
-          {/* Permit status */}
-          {hasValidPermit && (
-            <div className="flex items-center gap-1.5 mt-3">
-              <div className="w-2 h-2 rounded-full bg-success animate-pulse"></div>
-              <span className="text-xs text-success font-mono">Decryption permit active</span>
-            </div>
-          )}
-
-          {/* Unseal button */}
-          <button
-            onClick={handleUnsealBalance}
-            disabled={isUnsealing || !isCofheReady}
-            className="btn btn-sm btn-ghost border border-primary/30 text-primary mt-4 font-display uppercase tracking-wide"
-          >
-            {isUnsealing ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <Unlock className="w-4 h-4" />
+              <div style={{ fontSize: 32, fontWeight: 700, color: "var(--text-3)" }}>
+                🔒 ••••••
+              </div>
             )}
-            {unsealedBalance !== null ? "Refresh Balance" : "Unseal My Balance"}
-          </button>
-        </div>
-      )}
-
-      {/* Mint Button */}
-      {isWalletConnected && (
-        <button
-          onClick={handleMint}
-          disabled={isMinting}
-          className="btn btn-fhenix btn-lg w-full font-display uppercase tracking-wide"
-        >
-          {isMinting ? (
-            <Loader2 className="w-5 h-5 animate-spin" />
-          ) : (
-            <Coins className="w-5 h-5" />
+          </div>
+          {hasValidPermit && (
+            <span style={{ fontSize: 10, color: "var(--green-text)", display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--green)" }} />
+              Permit
+            </span>
           )}
-          Mint 1,000 AUCT Tokens
+        </div>
+
+        <button onClick={handleUnseal} disabled={unsealing || !isCofheReady} className="btn"
+          style={{ marginTop: 14, padding: "6px 14px", fontSize: 12 }}>
+          {unsealing && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>}
+          {balance !== null ? "Refresh" : "Unseal"}
         </button>
-      )}
+
+        <p style={{ fontSize: 11, color: "var(--text-3)", marginTop: 10 }}>
+          Balance is encrypted on-chain. Only you can unseal it.
+        </p>
+      </div>
+
+      {/* Mint */}
+      <button onClick={handleMint} disabled={minting} className="btn btn-white"
+        style={{ width: "100%", padding: "13px", fontSize: 15, marginBottom: 12 }}>
+        {minting && <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>}
+        Mint 1,000 AUCT
+      </button>
 
       {/* Info */}
-      <div className="bg-base-200 border border-base-300 p-6">
-        <h3 className="text-sm font-display font-bold text-base-content uppercase tracking-wide mb-3">
-          How FHE Balances Work
-        </h3>
-        <div className="space-y-2 text-sm text-base-content/70">
-          <p>
-            <span className="text-primary font-bold">Encrypted by default:</span> Your AUCT token balance is stored as encrypted data on-chain using Fully Homomorphic Encryption. No one can see it — not even block explorers.
-          </p>
-          <p>
-            <span className="text-primary font-bold">Only you can unseal:</span> Click "Unseal My Balance" to decrypt your balance using your wallet's permit. This happens client-side — the blockchain never sees your plaintext balance.
-          </p>
-          <p>
-            <span className="text-primary font-bold">Bets are confidential:</span> When you place a bet, encrypted tokens are transferred without revealing the amount. The pool totals are computed homomorphically on-chain.
-          </p>
+      <div className="card" style={{ padding: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>How it works</div>
+        <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.7 }}>
+          <p style={{ marginBottom: 6 }}><strong style={{ color: "var(--text-2)" }}>Encrypted</strong> — AUCT balances are stored as FHE ciphertext. Not even block explorers can read them.</p>
+          <p style={{ marginBottom: 6 }}><strong style={{ color: "var(--text-2)" }}>Private</strong> — Bets transfer encrypted tokens without revealing amounts.</p>
+          <p><strong style={{ color: "var(--text-2)" }}>Yours</strong> — Only your wallet can unseal your balance.</p>
         </div>
       </div>
+
+      {successModal && <SuccessModal title={successModal.title} message={successModal.message} onClose={() => setSuccessModal(null)} />}
     </div>
   );
 };
