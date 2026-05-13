@@ -16,8 +16,10 @@ import {
   betTokenAbi,
 } from "@/utils/marketContracts";
 
-const MARKET_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_MARKET_CONTRACT_ADDRESS as `0x${string}`;
-const TOKEN_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_TOKEN_CONTRACT_ADDRESS as `0x${string}`;
+const MARKET_CONTRACT_ADDRESS = process.env
+  .NEXT_PUBLIC_MARKET_CONTRACT_ADDRESS as `0x${string}`;
+const TOKEN_CONTRACT_ADDRESS = process.env
+  .NEXT_PUBLIC_TOKEN_CONTRACT_ADDRESS as `0x${string}`;
 
 // FHE operations are gas-heavy, so we set explicit gas limits
 const FHE_GAS_LIMIT = 10_000_000n;
@@ -67,7 +69,7 @@ export function useMarket() {
         return null;
       }
     },
-    [publicClient, setCachedMarket]
+    [publicClient, setCachedMarket],
   );
 
   const getTotalMarkets = useCallback(async (): Promise<bigint> => {
@@ -90,7 +92,8 @@ export function useMarket() {
       if (!publicClient) return [];
       try {
         const total = await getTotalMarkets();
-        const endId = startId + BigInt(limit) > total ? total : startId + BigInt(limit);
+        const endId =
+          startId + BigInt(limit) > total ? total : startId + BigInt(limit);
         const ids: bigint[] = [];
         for (let i = startId; i < endId; i++) ids.push(i);
         const results = await Promise.all(ids.map((id) => getMarket(id)));
@@ -100,7 +103,7 @@ export function useMarket() {
         return [];
       }
     },
-    [publicClient, getTotalMarkets, getMarket]
+    [publicClient, getTotalMarkets, getMarket],
   );
 
   const hasBetOnMarket = useCallback(
@@ -118,7 +121,7 @@ export function useMarket() {
         return false;
       }
     },
-    [publicClient]
+    [publicClient],
   );
 
   const getBettorOutcome = useCallback(
@@ -136,7 +139,7 @@ export function useMarket() {
         return null;
       }
     },
-    [publicClient]
+    [publicClient],
   );
 
   const hasClaimedFromMarket = useCallback(
@@ -154,13 +157,17 @@ export function useMarket() {
         return false;
       }
     },
-    [publicClient]
+    [publicClient],
   );
 
   // ============ Write Functions ============
 
   const createMarket = useCallback(
-    async (question: string, startTime: bigint, endTime: bigint): Promise<bigint | null> => {
+    async (
+      question: string,
+      startTime: bigint,
+      endTime: bigint,
+    ): Promise<bigint | null> => {
       if (!walletClient || !address || !publicClient) {
         toast.error("Wallet not connected");
         return null;
@@ -180,25 +187,33 @@ export function useMarket() {
           toast.error("Market creation failed", { id: "create-market" });
           return null;
         }
-        const events = parseEventLogs({ abi: cipherMarketAbi, logs: receipt.logs });
+        const events = parseEventLogs({
+          abi: cipherMarketAbi,
+          logs: receipt.logs,
+        });
         const event = events.find((e) => e.eventName === "MarketCreated");
         const marketId = (event?.args as any)?.marketId ?? null;
         toastTxSuccess("Market created!", hash, "create-market");
         triggerRefresh();
         return marketId;
-      } catch (error) {
+      } catch (error: any) {
         console.error("Failed to create market:", error);
+        console.error("Error details:", error?.cause || error?.message);
         toast.error("Failed to create market", { id: "create-market" });
         return null;
       } finally {
         setIsLoading(false);
       }
     },
-    [walletClient, address, publicClient, triggerRefresh]
+    [walletClient, address, publicClient, triggerRefresh],
   );
 
   const placeBet = useCallback(
-    async (marketId: bigint, outcome: Outcome, amount: bigint): Promise<string | null> => {
+    async (
+      marketId: bigint,
+      outcome: Outcome,
+      amount: bigint,
+    ): Promise<string | null> => {
       if (!walletClient || !address || !publicClient) {
         toast.error("Wallet not connected");
         return null;
@@ -253,7 +268,9 @@ export function useMarket() {
           utype: encrypted.utype,
           signature: encrypted.signature as `0x${string}`,
         };
-        toast.loading("Submitting encrypted bet to chain...", { id: "encrypt-bet" });
+        toast.loading("Submitting encrypted bet to chain...", {
+          id: "encrypt-bet",
+        });
 
         // Place bet with high gas limit for FHE operations
         const hash = await walletClient.writeContract({
@@ -280,7 +297,7 @@ export function useMarket() {
         setIsLoading(false);
       }
     },
-    [walletClient, address, publicClient, hasBetOnMarket, triggerRefresh]
+    [walletClient, address, publicClient, hasBetOnMarket, triggerRefresh],
   );
 
   const resolveMarket = useCallback(
@@ -313,7 +330,7 @@ export function useMarket() {
         setIsLoading(false);
       }
     },
-    [walletClient, address, publicClient, triggerRefresh]
+    [walletClient, address, publicClient, triggerRefresh],
   );
 
   const finalizeSettlement = useCallback(
@@ -332,7 +349,9 @@ export function useMarket() {
           args: [marketId],
         })) as [`0x${string}`, `0x${string}`];
 
-        toast.loading("Decrypting pool totals via Threshold Network...", { id: "finalize" });
+        toast.loading("Decrypting pool totals via Threshold Network...", {
+          id: "finalize",
+        });
         const [yesResult, noResult] = await Promise.all([
           cofheClient.decryptForTx(ctHashes[0]).withoutPermit().execute(),
           cofheClient.decryptForTx(ctHashes[1]).withoutPermit().execute(),
@@ -366,7 +385,7 @@ export function useMarket() {
         setIsLoading(false);
       }
     },
-    [walletClient, address, publicClient, triggerRefresh]
+    [walletClient, address, publicClient, triggerRefresh],
   );
 
   const claimWinnings = useCallback(
@@ -388,8 +407,12 @@ export function useMarket() {
         });
 
         toast.loading("Waiting for decryption request...", { id: "claim-win" });
-        await publicClient.waitForTransactionReceipt({ hash: reqHash });
+        const reqReceipt = await publicClient.waitForTransactionReceipt({
+          hash: reqHash,
+        });
+        console.log("requestBetDecryption receipt:", reqReceipt.status);
 
+        await new Promise((r) => setTimeout(r, 5000));
         // Get encrypted deposit and decrypt it
         toast.loading("Decrypting your bet amount...", { id: "claim-win" });
         const depositCt = await publicClient.readContract({
@@ -410,7 +433,11 @@ export function useMarket() {
           address: MARKET_CONTRACT_ADDRESS,
           abi: cipherMarketAbi,
           functionName: "claimWinnings",
-          args: [marketId, decryptResult.decryptedValue, decryptResult.signature],
+          args: [
+            marketId,
+            decryptResult.decryptedValue,
+            decryptResult.signature,
+          ],
           gas: FHE_GAS_LIMIT,
         });
 
@@ -427,7 +454,7 @@ export function useMarket() {
         setIsLoading(false);
       }
     },
-    [walletClient, address, publicClient, triggerRefresh]
+    [walletClient, address, publicClient, triggerRefresh],
   );
 
   const claimRefund = useCallback(
@@ -460,7 +487,7 @@ export function useMarket() {
         setIsLoading(false);
       }
     },
-    [walletClient, address, publicClient, triggerRefresh]
+    [walletClient, address, publicClient, triggerRefresh],
   );
 
   const cancelMarket = useCallback(
@@ -492,7 +519,7 @@ export function useMarket() {
         setIsLoading(false);
       }
     },
-    [walletClient, address, publicClient, triggerRefresh]
+    [walletClient, address, publicClient, triggerRefresh],
   );
 
   return {

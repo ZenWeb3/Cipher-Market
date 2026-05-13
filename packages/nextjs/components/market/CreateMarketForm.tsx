@@ -5,7 +5,7 @@ import { useAccount } from "wagmi";
 import { useMarket } from "@/hooks/useMarket";
 
 interface CreateMarketFormProps {
-  onSuccess?: () => void;
+  onSuccess?: (marketId: bigint) => void;
 }
 
 export const CreateMarketForm = ({ onSuccess }: CreateMarketFormProps) => {
@@ -27,10 +27,11 @@ export const CreateMarketForm = ({ onSuccess }: CreateMarketFormProps) => {
     if (!question.trim()) return;
     const hours = parseFloat(duration) || 1;
     const now = Math.floor(Date.now() / 1000);
-    const result = await createMarket(question.trim(), BigInt(now + 60), BigInt(now + Math.floor(hours * 3600)));
+   const startTime = now + 10;
+    const result = await createMarket(question.trim(), BigInt(startTime), BigInt(startTime + Math.floor(hours * 3600)));
     if (result !== null) {
       setQuestion("");
-      onSuccess?.();
+      onSuccess?.(result);
     }
   };
 
@@ -62,7 +63,8 @@ export const CreateMarketForm = ({ onSuccess }: CreateMarketFormProps) => {
             {durations.map(d => (
               <button key={d.value} onClick={() => setDuration(d.value)} disabled={isLoading}
                 style={{
-                  padding: "7px 0", fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono'",
+                  padding: "7px 0", fontSize: 12, fontWeight: 600,
+                  fontFamily: "var(--font-mono), 'JetBrains Mono', monospace",
                   background: duration === d.value ? "var(--surface-3)" : "var(--surface)",
                   border: `1px solid ${duration === d.value ? "var(--border-hover)" : "var(--border)"}`,
                   borderRadius: 6, color: duration === d.value ? "var(--text)" : "var(--text-3)",

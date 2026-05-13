@@ -18,27 +18,20 @@ type Tab = "all" | "create" | "my-bets";
 
 const ONE_HOUR = BigInt(3600);
 
-/**
- * Pure helper → all filtering logic lives here
- */
 function categorizeMarkets(markets: MarketData[]) {
   const now = BigInt(Math.floor(Date.now() / 1000));
 
   const allActive = markets.filter(
-    (m) => getEffectiveStatus(m) === MarketStatus.Active
+    (m) => getEffectiveStatus(m) === MarketStatus.Active,
   );
 
-  const endingSoon = allActive
-    .filter(
-      (m) => m.endTime > now && (m.endTime - now) <= ONE_HOUR
-    )
+const endingSoon = allActive
+    .filter((m) => m.startTime <= now && m.endTime > now && m.endTime - now <= ONE_HOUR)
     .sort((a, b) => Number(a.endTime - b.endTime));
 
   const endingSoonIds = new Set(endingSoon.map((m) => m.id.toString()));
 
-  const active = allActive.filter(
-    (m) => !endingSoonIds.has(m.id.toString())
-  );
+  const active = allActive.filter((m) => !endingSoonIds.has(m.id.toString()));
 
   const closed = markets.filter((m) => {
     const s = getEffectiveStatus(m);
@@ -46,15 +39,10 @@ function categorizeMarkets(markets: MarketData[]) {
   });
 
   const settled = markets.filter(
-    (m) => getEffectiveStatus(m) === MarketStatus.Settled
+    (m) => getEffectiveStatus(m) === MarketStatus.Settled,
   );
 
-  return {
-    endingSoon,
-    active,
-    closed,
-    settled,
-  };
+  return { endingSoon, active, closed, settled };
 }
 
 export const MarketsPage = () => {
@@ -67,10 +55,10 @@ export const MarketsPage = () => {
   const [tab, setTab] = useState<Tab>("all");
   const [markets, setMarkets] = useState<MarketData[]>([]);
   const [myBets, setMyBets] = useState<MarketData[]>([]);
-  const [loading, setLoading] = useState(true);
   const [successModal, setSuccessModal] = useState<{
     title: string;
     message: string;
+    action?: { label: string; onClick: () => void };
   } | null>(null);
 
   const pollRef = useRef<NodeJS.Timeout | null>(null);
@@ -80,15 +68,11 @@ export const MarketsPage = () => {
     if (!publicClient || loadingRef.current) return;
 
     loadingRef.current = true;
-     if (markets.length === 0) setLoading(true);
 
     try {
       const total = await getTotalMarkets();
       const all = await getAllMarkets(BigInt(0), Number(total));
-
-      // stable descending sort
       all.sort((a, b) => Number(b.id - a.id));
-
       setMarkets(all);
 
       if (address) {
@@ -96,9 +80,8 @@ export const MarketsPage = () => {
           all.map(async (m) => ({
             m,
             bet: await hasBetOnMarket(m.id, address),
-          }))
+          })),
         );
-
         setMyBets(checks.filter((c) => c.bet).map((c) => c.m));
       } else {
         setMyBets([]);
@@ -107,7 +90,6 @@ export const MarketsPage = () => {
       console.error(e);
     } finally {
       loadingRef.current = false;
-      setLoading(false);
     }
   }, [publicClient, address, getAllMarkets, getTotalMarkets, hasBetOnMarket]);
 
@@ -124,7 +106,7 @@ export const MarketsPage = () => {
 
   const { endingSoon, active, closed, settled } = useMemo(
     () => categorizeMarkets(markets),
-    [markets]
+    [markets],
   );
 
   if (selectedMarketId !== null) {
@@ -167,7 +149,6 @@ export const MarketsPage = () => {
     items: MarketData[];
   }) => {
     if (items.length === 0) return null;
-
     return (
       <div style={{ marginBottom: 28 }}>
         <div
@@ -193,7 +174,7 @@ export const MarketsPage = () => {
             style={{
               fontSize: 11,
               color: "var(--text-3)",
-              fontFamily: "'JetBrains Mono'",
+              fontFamily: "var(--font-mono), 'JetBrains Mono', monospace",
             }}
           >
             {count}
@@ -205,7 +186,7 @@ export const MarketsPage = () => {
   };
 
   return (
-    <div className="fade-in">
+    <div>
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
         <h1
@@ -219,7 +200,7 @@ export const MarketsPage = () => {
           Markets
         </h1>
         <p style={{ fontSize: 14, color: "var(--text-3)" }}>
-          Encrypted prediction markets on Base Sepolia
+          Private prediction markets powered by FHE
         </p>
       </div>
 
@@ -249,37 +230,46 @@ export const MarketsPage = () => {
         ))}
       </div>
 
-      {/* Loading */}
-      {loading && (
-        <div
-          style={{
-            padding: "60px 0",
-            textAlign: "center",
-            color: "var(--text-3)",
-          }}
-        >
-          Loading...
-        </div>
-      )}
-
       {/* All Markets */}
-      {tab === "all" && !loading && (
+      {tab === "all" && (
         <div>
           {!publicClient && (
-            <div style={{ padding: "48px 0", textAlign: "center" }}>
+            <div
+              style={{
+                padding: "48px 0",
+                textAlign: "center",
+                color: "var(--text-3)",
+                fontSize: 13,
+              }}
+            >
               Connect wallet to browse
             </div>
           )}
 
           {publicClient && markets.length === 0 && (
-            <div style={{ padding: "48px 0", textAlign: "center" }}>
+            <div
+              style={{
+                padding: "48px 0",
+                textAlign: "center",
+                color: "var(--text-3)",
+                fontSize: 13,
+              }}
+            >
               No markets yet
             </div>
           )}
 
-          <Section label="Ending soon" count={endingSoon.length} items={endingSoon} />
+          <Section
+            label="Ending soon"
+            count={endingSoon.length}
+            items={endingSoon}
+          />
           <Section label="Active" count={active.length} items={active} />
-          <Section label="Awaiting resolution" count={closed.length} items={closed} />
+          <Section
+            label="Awaiting resolution"
+            count={closed.length}
+            items={closed}
+          />
           <Section label="Settled" count={settled.length} items={settled} />
         </div>
       )}
@@ -287,38 +277,59 @@ export const MarketsPage = () => {
       {/* Create */}
       {tab === "create" && (
         <CreateMarketForm
-          onSuccess={() => {
+          onSuccess={(marketId: bigint) => {
+            load();
             setSuccessModal({
               title: "Market Created",
               message:
-                "Your prediction market is now live. Share it and start collecting bets.",
+                "Your prediction market is live. Betting opens in ~1 minute.",
+              action: {
+                label: "Go to Market & Place Bet",
+                onClick: () => {
+                  setSuccessModal(null);
+                  setTab("all");
+                  setSelectedMarketId(marketId);
+                },
+              },
             });
-            setTab("all");
-            load();
           }}
         />
       )}
 
       {/* My Bets */}
-      {tab === "my-bets" && !loading && (
-        !address ? (
-          <div style={{ padding: "48px 0", textAlign: "center" }}>
+      {tab === "my-bets" &&
+        (!address ? (
+          <div
+            style={{
+              padding: "48px 0",
+              textAlign: "center",
+              color: "var(--text-3)",
+              fontSize: 13,
+            }}
+          >
             Connect wallet
           </div>
         ) : myBets.length === 0 ? (
-          <div style={{ padding: "48px 0", textAlign: "center" }}>
+          <div
+            style={{
+              padding: "48px 0",
+              textAlign: "center",
+              color: "var(--text-3)",
+              fontSize: 13,
+            }}
+          >
             No bets yet
           </div>
         ) : (
           grid(myBets)
-        )
-      )}
+        ))}
 
       {/* Success Modal */}
       {successModal && (
         <SuccessModal
           title={successModal.title}
           message={successModal.message}
+          action={successModal.action}
           onClose={() => setSuccessModal(null)}
         />
       )}
